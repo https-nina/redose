@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ReDose: fetch openFDA counts</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; }
+  button { font-size: 16px; padding: 10px 18px; cursor: pointer; }
+  pre { background: #f4f4f4; padding: 12px; overflow: auto; max-height: 360px; font-size: 13px; }
+  .ok { color: #0a7a3a; } .bad { color: #b00020; }
+</style>
+</head>
+<body>
+<h1>ReDose: cache openFDA sex counts</h1>
+<p>Step 2 of the build. This page reads <code>drugs.csv</code>, asks openFDA how many adverse event reports exist for each drug by patient sex, adds the all-drugs baseline, and downloads <code>counts.json</code>. About 60 requests, well under the 1,000 per day limit. Takes about a minute.</p>
+<p><input type="file" id="csv" accept=".csv"> then <button id="go" disabled>Fetch counts</button></p>
+<p id="status"></p>
+<pre id="log"></pre>
+
+<script>
+// ReDose build, step 2. Fetches count-by-sex for each drug in drugs.csv from openFDA.
+// openFDA field: patient.patientsex (0 unknown, 1 male, 2 female). CORS is enabled, no key needed.
+
+const API = 'https://api.fda.gov/drug/event.json';
+let drugs = [];
+
+// Minimal CSV parser that handles quoted cells with commas.
+function parseCSV(text) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') q = false;
+      else cell += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (c !== '\r') cell += c;
+  }
+  if (cell.length || row.length) { row.push(cell); rows.push(row); }
+  const header = rows.shift();
+  return rows.filter(r => r.length === header.length)
+             .map(r => Object.fromEntries(header.map((h, i) => [h, r[i]])));
+}
+
+document.getElementById('csv').addEventListener('change', async (e) => {
+  const text = await e.target.files[0].text();
+  drugs = parseCSV(text);
+  log(`Loaded ${drugs.length} drugs from CSV.`);
+  document.getElementById('go').disabled = drugs.length === 0;
+});
+
+function log(msg, cls) {
+  const el = document.getElementById('log');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+// Ask openFDA for report counts by sex. Returns {female, male, unknown, total}.
+// searchExpr is a full openFDA search expression, or null for the all-reports baseline.
+async function countBySex(searchExpr) {
+  const search = searchExpr ? `search=${searchExpr}&` : '';
+  const url = `${API}?${search}count=patient.patientsex`;
+  const res = await fetch(url);
+  if (res.status === 404) return { female: 0, male: 0, unknown: 0, total: 0, note: 'no reports found' };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const out = { female: 0, male: 0, unknown: 0 };
+  for (const r of data.results) {
+    if (r.term === 2) out.female = r.count;
+    else if (r.term === 1) out.male = r.count;
+    else out.unknown = r.count;
+  }
+  out.total = out.female + out.male + out.unknown;
+  return out;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+document.getElementById('go').addEventListener('click', async () => {
+  document.getElementById('go').disabled = true;
+  const result = { fetched_at: new Date().toISOString(), source: 'openFDA drug/event, count=patient.patientsex', baseline: null, drugs: {} };
+  try {
+    result.baseline = await countBySex(null);
+    const bf = result.baseline.female / (result.baseline.female + result.baseline.male);
+    log(`Baseline (all reports): female ${result.baseline.female.toLocaleString()}, male ${result.baseline.male.toLocaleString()}, female share ${(bf * 100).toFixed(1)}%`, 'ok');
+  } catch (err) { log('Baseline failed: ' + err.message, 'bad'); }
+
+  for (const d of drugs) {
+    const name = d.openfda_generic_name;
+    try {
+      // Drugs with no FAERS data by design (not prescription, or withdrawn before 2004).
+      if (d.fallback_query === 'NONE') {
+        result.drugs[d.drug] = { generic: name, female: 0, male: 0, unknown: 0, total: 0, note: 'no FAERS data (not a US prescription drug or withdrawn before 2004)' };
+        log(`${d.drug.padEnd(16)} skipped: no FAERS data by design`);
+        continue;
+      }
+      let c = await countBySex(`patient.drug.openfda.generic_name:"${encodeURIComponent(name)}"`);
+      // If the generic name finds nothing and the CSV gives a fallback (e.g. a brand in the raw field), try that.
+      if (c.total === 0 && d.fallback_query) {
+        c = await countBySex(d.fallback_query);
+        c.note = `via fallback query ${d.fallback_query}`;
+      }
+      result.drugs[d.drug] = { generic: name, ...c };
+      const share = c.total ? (c.female / (c.female + c.male) * 100).toFixed(1) + '%' : 'n/a';
+      log(`${d.drug.padEnd(16)} F ${String(c.female).padStart(8)}  M ${String(c.male).padStart(8)}  female share ${share}`);
+    } catch (err) {
+      result.drugs[d.drug] = { generic: name, error: err.message };
+      log(`${d.drug}: ${err.message}`, 'bad');
+    }
+    await sleep(300); // stay well under 240 requests per minute
+  }
+
+  const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'counts.json';
+  a.click();
+  document.getElementById('status').textContent = 'Done. counts.json downloaded. Put it next to drugs.csv.';
+});
+</script>
+</body>
+</html>

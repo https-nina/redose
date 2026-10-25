@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReDose</title>
+<style>
+  :root { --ink:#1a1a1a; --muted:#666; --line:#e4e4e4; --f:#c2185b; --m:#1565c0; --bg:#fff; --card:#fafafa; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; color: var(--ink); background: var(--bg); margin: 0; }
+  header { padding: 28px 24px 12px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0 0 4px; font-size: 26px; }
+  header p { margin: 0; color: var(--muted); max-width: 820px; }
+  main { display: grid; grid-template-columns: 300px 1fr; gap: 0; min-height: calc(100vh - 110px); }
+  aside { border-right: 1px solid var(--line); padding: 16px; overflow-y: auto; max-height: calc(100vh - 110px); }
+  section { padding: 20px 24px; max-width: 980px; }
+  input[type=search] { width: 100%; padding: 8px 10px; font-size: 14px; border: 1px solid #bbb; border-radius: 6px; }
+  .drug { display: flex; justify-content: space-between; padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+  .drug:hover { background: #f0f0f0; } .drug.active { background: #e8eef9; font-weight: 600; }
+  .share { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .share.up { color: var(--f); } .share.down { color: var(--m); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 17px; }
+  .card h3 { margin: 14px 0 6px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .bars { display: grid; grid-template-columns: 140px 1fr 70px; gap: 8px 12px; align-items: center; font-size: 14px; }
+  .track { height: 18px; background: #eee; border-radius: 4px; position: relative; overflow: hidden; }
+  .fill { height: 100%; background: var(--f); }
+  .mark { position: absolute; top: -3px; width: 2px; height: 24px; background: #333; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .flag { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+  .flag.yes { background: #e3f3e8; color: #0a6b35; } .flag.no { background: #fdeaea; color: #a0141c; } .flag.na { background: #eee; color: #555; }
+  .note { color: var(--muted); font-size: 13px; }
+  button { font-size: 14px; padding: 7px 12px; border-radius: 6px; border: 1px solid #999; background: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #setup { padding: 24px; }
+  footer { padding: 16px 24px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); }
+  blockquote { margin: 8px 0; padding: 8px 12px; border-left: 3px solid #bbb; background: #f6f6f6; font-size: 13.5px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } aside { max-height: 260px; border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ReDose</h1>
+  <p>59 drugs with a documented sex difference in how the body handles them (Zucker and Prendergast, 2020), checked against what patients actually report to the FDA. Which drugs hit women harder, which reactions, and whether the label says so.</p>
+</header>
+
+<main id="app">
+  <aside>
+    <input type="search" id="q" placeholder="Search 59 drugs">
+    <p class="note" id="baselineNote"></p>
+    <div id="list"></div>
+  </aside>
+  <section>
+    <div class="card" id="validation"></div>
+    <div id="detail"><p class="note">Pick a drug on the left.</p></div>
+  </section>
+</main>
+
+<footer>
+  Drug list from Zucker I, Prendergast BJ. Sex differences in pharmacokinetics predict adverse drug reactions in women. Biol Sex Differ 2020;11:32 (CC BY 4.0). Adverse event counts from FDA openFDA (FAERS); reports are unverified and reflect who takes a drug as much as what it does. Not medical advice. Built by Nina Khanna for TKS Innovate.
+</footer>
+
+<script>
+// ---------- Data ----------
+// The 59-drug table from Zucker and Prendergast Table 1, embedded so the page works offline.
+const DRUGS = [
+{
+"drug": "Liraglutide",
+"openfda_generic_name": "liraglutide",
+"atc_category": "Alimentary tract, metabolism",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "headache, vomiting, nausea",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Ranitidine",
+"openfda_generic_name": "ranitidine",
+"atc_category": "Alimentary tract, metabolism",
+"pk_measure": "AUC, Tmax",
+"pk_exposure_bias": "M>F",
+"female_biased_adrs": "",
+"male_biased_adrs": "Duodenal damage",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Rosiglitazone",
+"openfda_generic_name": "rosiglitazone",
+"atc_category": "Alimentary tract, metabolism",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Fracture",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": "patient.drug.medicinalproduct:avandia"
+},
+{
+"drug": "Heparin",
+"openfda_generic_name": "heparin",
+"atc_category": "Blood and blood forming organs",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "blood disorders, lymphatic disorders, bleeding (60 yoa)",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Aspirin",
+"openfda_generic_name": "aspirin",
+"atc_category": "Blood and blood forming organs",
+"pk_measure": "AUC, ClT, t1/2",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "elevated fibrinogen, CVD in T2D",
+"male_biased_adrs": "Bleeding",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Warfarin",
+"openfda_generic_name": "warfarin",
+"atc_category": "Blood and blood forming organs",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Bleeding",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Clopidogrel",
+"openfda_generic_name": "clopidogrel",
+"atc_category": "Blood and blood forming organs",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "fracture, bleeding, GI symptoms, IBD",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Dabigatran",
+"openfda_generic_name": "dabigatran",
+"atc_category": "Blood and blood forming organs",
+"pk_measure": "AUC",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Bleeding",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Torasemide",
+"openfda_generic_name": "torsemide",
+"atc_category": "Cardiovascular system",
+"pk_measure": "AUC, Cmax, ClT, t1/2",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Hospitalization",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Pravastatin",
+"openfda_generic_name": "pravastatin",
+"atc_category": "Cardiovascular system",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "CHD",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Amlodipine",
+"openfda_generic_name": "amlodipine",
+"atc_category": "Cardiovascular system",
+"pk_measure": "CLT",
+"pk_exposure_bias": "M>F",
+"female_biased_adrs": "Edema, flushing, palpitations",
+"male_biased_adrs": "",
+"pk_vs_adr": "Discordant",
+"fallback_query": ""
+},
+{
+"drug": "Digoxin",
+"openfda_generic_name": "digoxin",
+"atc_category": "Cardiovascular system",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Mortality",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Verapamil",
+"openfda_generic_name": "verapamil",
+"atc_category": "Cardiovascular system",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Constipation, edema, fatigue, headache",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Aliskiren",
+"openfda_generic_name": "aliskiren",
+"atc_category": "Cardiovascular system",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Diarrhea",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Losartan",
+"openfda_generic_name": "losartan",
+"atc_category": "Cardiovascular system",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "",
+"male_biased_adrs": "Angina, mortality",
+"pk_vs_adr": "Discordant",
+"fallback_query": ""
+},
+{
+"drug": "Propranolol",
+"openfda_generic_name": "propranolol",
+"atc_category": "Cardiovascular system",
+"pk_measure": "AUC, Cmax, ClT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Dizziness, muscle pain, headache, dry mouth",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Dofetilide",
+"openfda_generic_name": "dofetilide",
+"atc_category": "Cardiovascular system",
+"pk_measure": "SysExp",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "TdP",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Mirabegron",
+"openfda_generic_name": "mirabegron",
+"atc_category": "Genito-urinary system, sex hormones",
+"pk_measure": "AUC, Cmax, SysExp",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Treatment discontinuation (CAN), treatment discontinuation (CZE)",
+"male_biased_adrs": "Treatment discontinuation (UK)",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Darifenacin",
+"openfda_generic_name": "darifenacin",
+"atc_category": "Genito-urinary system, sex hormones",
+"pk_measure": "AUC, Cmax, ClT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "F > M, ADRs not specified",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Trospium",
+"openfda_generic_name": "trospium",
+"atc_category": "Genito-urinary system, sex hormones",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Cognitive impairments",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Prednisone",
+"openfda_generic_name": "prednisone",
+"atc_category": "Systemic hormonal preparations",
+"pk_measure": "AUC, ClT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Depression, fatigue, hair loss, mood swings, weight gain",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Levofloxacin",
+"openfda_generic_name": "levofloxacin",
+"atc_category": "Anti-infectives",
+"pk_measure": "ClT, SysExp",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Fluoroquinolone toxicity",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Erythromycin",
+"openfda_generic_name": "erythromycin",
+"atc_category": "Anti-infectives",
+"pk_measure": "CLT",
+"pk_exposure_bias": "M>F",
+"female_biased_adrs": "TdP",
+"male_biased_adrs": "",
+"pk_vs_adr": "Discordant",
+"fallback_query": ""
+},
+{
+"drug": "Voriconazole",
+"openfda_generic_name": "voriconazole",
+"atc_category": "Anti-infectives",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Cardiac QTc symptoms",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Cyclosporin",
+"openfda_generic_name": "cyclosporine",
+"atc_category": "Antineoplastics, immunomodulators",
+"pk_measure": "CLT",
+"pk_exposure_bias": "M>F",
+"female_biased_adrs": "",
+"male_biased_adrs": "",
+"pk_vs_adr": "Discordant (no evidence of sex differences in ADRs)",
+"fallback_query": ""
+},
+{
+"drug": "Fluorouracil",
+"openfda_generic_name": "fluorouracil",
+"atc_category": "Antineoplastics, immunomodulators",
+"pk_measure": "AUC, ClT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Stomatitis, leukopenia, alopecia, diarrhea, mucositis",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Paclitaxel",
+"openfda_generic_name": "paclitaxel",
+"atc_category": "Antineoplastics, immunomodulators",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Myocardial infarction, death, lesion revascularization",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Capecitabine",
+"openfda_generic_name": "capecitabine",
+"atc_category": "Antineoplastics, immunomodulators",
+"pk_measure": "AUC",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Dose-limiting toxicity",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Infliximab",
+"openfda_generic_name": "infliximab",
+"atc_category": "Antineoplastics, immunomodulators",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Allergic reactions",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Adalimumab",
+"openfda_generic_name": "adalimumab",
+"atc_category": "Antineoplastics, immunomodulators",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Allergic reactions",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Morphine",
+"openfda_generic_name": "morphine",
+"atc_category": "Anesthetics, analgesics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Respiratory depression, hypoxic sensitivity, emesis, nausea",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Oxycodone",
+"openfda_generic_name": "oxycodone",
+"atc_category": "Anesthetics, analgesics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Nausea, pruritus, negative affect",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Buprenorphine",
+"openfda_generic_name": "buprenorphine",
+"atc_category": "Anesthetics, analgesics",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Sleep disturbance",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Tramadol",
+"openfda_generic_name": "tramadol",
+"atc_category": "Anesthetics, analgesics",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Treatment discontinuation",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Zolmitriptan",
+"openfda_generic_name": "zolmitriptan",
+"atc_category": "Anesthetics, analgesics",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Face and neck pressure",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Ketamine",
+"openfda_generic_name": "ketamine",
+"atc_category": "Anesthetics, analgesics",
+"pk_measure": "ClT",
+"pk_exposure_bias": "M>F",
+"female_biased_adrs": "",
+"male_biased_adrs": "Verbal learning, subjective memory",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Carbamazepine",
+"openfda_generic_name": "carbamazepine",
+"atc_category": "Anti-epileptics, anti-Parkinson's",
+"pk_measure": "ClT, t1/2",
+"pk_exposure_bias": "M>F",
+"female_biased_adrs": "Cognitive impairment, elevated LDL/HDL",
+"male_biased_adrs": "",
+"pk_vs_adr": "Discordant",
+"fallback_query": ""
+},
+{
+"drug": "Gabapentin",
+"openfda_generic_name": "gabapentin",
+"atc_category": "Anti-epileptics, anti-Parkinson's",
+"pk_measure": "Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Dizziness, somnolence, nausea",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Perampanel",
+"openfda_generic_name": "perampanel",
+"atc_category": "Anti-epileptics, anti-Parkinson's",
+"pk_measure": "AUC, ClT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Dizziness, headache, treatment discontinuation",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Pramipexole",
+"openfda_generic_name": "pramipexole",
+"atc_category": "Anti-epileptics, anti-Parkinson's",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Nausea, fatigue",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Olanzapine",
+"openfda_generic_name": "olanzapine",
+"atc_category": "Psycholeptics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Severe weight gain",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Clozapine",
+"openfda_generic_name": "clozapine",
+"atc_category": "Psycholeptics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Blood glucose, laxative use, obesity, type II diabetes, neutropenia, leukopenia, weight gain",
+"male_biased_adrs": "Hypertension, increases in BMI, elevated homocysteine, increased basal metabolic rate, increased plasma lipids, QTc symptoms, blood dyscrasias, myocarditis, cardiomyopathy",
+"pk_vs_adr": "Discordant",
+"fallback_query": ""
+},
+{
+"drug": "Risperidone",
+"openfda_generic_name": "risperidone",
+"atc_category": "Psycholeptics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Hyperprolactinemia, neurological effects, headache, hypotension",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Aripiprazol",
+"openfda_generic_name": "aripiprazole",
+"atc_category": "Psycholeptics",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Blood pressure, heart rate, elongated QTc",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Diazepam",
+"openfda_generic_name": "diazepam",
+"atc_category": "Psycholeptics",
+"pk_measure": "t1/2",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Psychomotor impairment",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Zolpidem",
+"openfda_generic_name": "zolpidem",
+"atc_category": "Psycholeptics",
+"pk_measure": "AUC, Cmax, ClT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Cognitive impairment, driving impairment",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Eszopiclone",
+"openfda_generic_name": "eszopiclone",
+"atc_category": "Psycholeptics",
+"pk_measure": "AUC",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Dysgeusia",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Imipramine",
+"openfda_generic_name": "imipramine",
+"atc_category": "Psychoanaleptics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Dry mouth, constipation, sweating, tremor, treatment discontinuation",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Nortriptyline",
+"openfda_generic_name": "nortriptyline",
+"atc_category": "Psychoanaleptics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Dry mouth",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Fluoxetine",
+"openfda_generic_name": "fluoxetine",
+"atc_category": "Psychoanaleptics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Hypercortisolemia, elevated albumin, elevated tryptophan, suicidal ideation",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Citalopram",
+"openfda_generic_name": "citalopram",
+"atc_category": "Psychoanaleptics",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Elevated ADH",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Sertraline",
+"openfda_generic_name": "sertraline",
+"atc_category": "Psychoanaleptics",
+"pk_measure": "AUC, ClT, t1/2",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Cholesterol, nausea, dizziness, delusions",
+"male_biased_adrs": "Dyspepsia, sexual dysfunction, urinary frequency",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Bupropion",
+"openfda_generic_name": "bupropion",
+"atc_category": "Psychoanaleptics",
+"pk_measure": "AUC, Cmax, t1/2",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "EEG abnormalities, seizure",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Methylphenidate",
+"openfda_generic_name": "methylphenidate",
+"atc_category": "Psychoanaleptics",
+"pk_measure": "AUC",
+"pk_exposure_bias": "M>F",
+"female_biased_adrs": "Anxiety disorder",
+"male_biased_adrs": "",
+"pk_vs_adr": "Discordant",
+"fallback_query": ""
+},
+{
+"drug": "Primaquine",
+"openfda_generic_name": "primaquine",
+"atc_category": "Antiparasitics",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Nausea",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "Terfenadine",
+"openfda_generic_name": "terfenadine",
+"atc_category": "Respiratory",
+"pk_measure": "Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "TdP",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": "NONE"
+},
+{
+"drug": "Fexofenadine",
+"openfda_generic_name": "fexofenadine",
+"atc_category": "Respiratory",
+"pk_measure": "AUC, Cmax",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Visual attention deficits, reaction time deficits, driving impairments",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": ""
+},
+{
+"drug": "MDMA",
+"openfda_generic_name": "methylenedioxymethamphetamine",
+"atc_category": "Miscellaneous",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Elevated copeptin, hyponatremia",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": "NONE"
+},
+{
+"drug": "Cannabis",
+"openfda_generic_name": "cannabis",
+"atc_category": "Miscellaneous",
+"pk_measure": "CLT",
+"pk_exposure_bias": "F>M",
+"female_biased_adrs": "Increased subjective emotional responses, problematic use, introvertive anhedonia",
+"male_biased_adrs": "",
+"pk_vs_adr": "Concordant",
+"fallback_query": "NONE"
+}
+];
+
+// Cached openFDA counts by sex, fetched 2026-10-25 with fetch_counts.html.
+const COUNTS = {"fetched_at": "2026-10-25T21:39:02.352Z", "source": "openFDA drug/event, count=patient.patientsex", "baseline": {"female": 10906987, "male": 7165182, "unknown": 106725, "total": 18178894}, "drugs": {"Liraglutide": {"generic": "liraglutide", "female": 30463, "male": 17071, "unknown": 149, "total": 47683}, "Ranitidine": {"generic": "ranitidine", "female": 99500, "male": 90961, "unknown": 143, "total": 190604}, "Rosiglitazone": {"generic": "rosiglitazone", "female": 33778, "male": 42436, "unknown": 688, "total": 76902, "note": "via fallback query patient.drug.medicinalproduct:avandia"}, "Heparin": {"generic": "heparin", "female": 5361, "male": 6414, "unknown": 148, "total": 11923}, "Aspirin": {"generic": "aspirin", "female": 260075, "male": 258890, "unknown": 1359, "total": 520324}, "Warfarin": {"generic": "warfarin", "female": 57488, "male": 58690, "unknown": 342, "total": 116520}, "Clopidogrel": {"generic": "clopidogrel", "female": 83195, "male": 108293, "unknown": 1506, "total": 192994}, "Dabigatran": {"generic": "dabigatran", "female": 33588, "male": 36858, "unknown": 885, "total": 71331}, "Torasemide": {"generic": "torsemide", "female": 16555, "male": 14268, "unknown": 20, "total": 30843}, "Pravastatin": {"generic": "pravastatin", "female": 10380, "male": 7927, "unknown": 22, "total": 18329}, "Amlodipine": {"generic": "amlodipine", "female": 216389, "male": 181299, "unknown": 630, "total": 398318}, "Digoxin": {"generic": "digoxin", "female": 35805, "male": 31413, "unknown": 239, "total": 67457}, "Verapamil": {"generic": "verapamil", "female": 2193, "male": 1520, "unknown": 23, "total": 3736}, "Aliskiren": {"generic": "aliskiren", "female": 3066, "male": 2046, "unknown": 59, "total": 5171}, "Losartan": {"generic": "losartan", "female": 51354, "male": 33094, "unknown": 76, "total": 84524}, "Propranolol": {"generic": "propranolol", "female": 43014, "male": 21412, "unknown": 201, "total": 64627}, "Dofetilide": {"generic": "dofetilide", "female": 4558, "male": 4815, "unknown": 101, "total": 9474}, "Mirabegron": {"generic": "mirabegron", "female": 23892, "male": 11908, "unknown": 213, "total": 36013}, "Darifenacin": {"generic": "darifenacin", "female": 593, "male": 181, "unknown": 3, "total": 777}, "Trospium": {"generic": "trospium", "female": 2011, "male": 1654, "unknown": 4, "total": 3669}, "Prednisone": {"generic": "prednisone", "female": 265918, "male": 175964, "unknown": 2032, "total": 443914}, "Levofloxacin": {"generic": "levofloxacin", "female": 27054, "male": 25774, "unknown": 227, "total": 53055}, "Erythromycin": {"generic": "erythromycin", "female": 11901, "male": 5125, "unknown": 77, "total": 17103}, "Voriconazole": {"generic": "voriconazole", "female": 10513, "male": 16373, "unknown": 144, "total": 27030}, "Cyclosporin": {"generic": "cyclosporine", "female": 63961, "male": 38235, "unknown": 623, "total": 102819}, "Fluorouracil": {"generic": "fluorouracil", "female": 29643, "male": 36287, "unknown": 817, "total": 66747}, "Paclitaxel": {"generic": "paclitaxel", "female": 60287, "male": 25225, "unknown": 357, "total": 85869}, "Capecitabine": {"generic": "capecitabine", "female": 52531, "male": 29246, "unknown": 542, "total": 82319}, "Infliximab": {"generic": "infliximab", "female": 120634, "male": 70182, "unknown": 766, "total": 191582}, "Adalimumab": {"generic": "adalimumab", "female": 458914, "male": 216551, "unknown": 1952, "total": 677417}, "Morphine": {"generic": "morphine", "female": 83273, "male": 73305, "unknown": 548, "total": 157126}, "Oxycodone": {"generic": "oxycodone", "female": 140091, "male": 144739, "unknown": 392, "total": 285222}, "Buprenorphine": {"generic": "buprenorphine", "female": 49561, "male": 41171, "unknown": 345, "total": 91077}, "Tramadol": {"generic": "tramadol", "female": 20310, "male": 13118, "unknown": 91, "total": 33519}, "Zolmitriptan": {"generic": "zolmitriptan", "female": 5604, "male": 942, "unknown": 18, "total": 6564}, "Ketamine": {"generic": "ketamine", "female": 2632, "male": 1747, "unknown": 26, "total": 4405}, "Carbamazepine": {"generic": "carbamazepine", "female": 35011, "male": 24968, "unknown": 375, "total": 60354}, "Gabapentin": {"generic": "gabapentin", "female": 217967, "male": 117566, "unknown": 765, "total": 336298}, "Perampanel": {"generic": "perampanel", "female": 3306, "male": 2817, "unknown": 6, "total": 6129}, "Pramipexole": {"generic": "pramipexole", "female": 10792, "male": 7099, "unknown": 22, "total": 17913}, "Olanzapine": {"generic": "olanzapine", "female": 48587, "male": 49503, "unknown": 492, "total": 98582}, "Clozapine": {"generic": "clozapine", "female": 43066, "male": 67530, "unknown": 209, "total": 110805}, "Risperidone": {"generic": "risperidone", "female": 42023, "male": 74781, "unknown": 538, "total": 117342}, "Aripiprazol": {"generic": "aripiprazole", "female": 63899, "male": 44620, "unknown": 571, "total": 109090}, "Diazepam": {"generic": "diazepam", "female": 63799, "male": 46721, "unknown": 560, "total": 111080}, "Zolpidem": {"generic": "zolpidem", "female": 80643, "male": 45480, "unknown": 301, "total": 126424}, "Eszopiclone": {"generic": "eszopiclone", "female": 15660, "male": 8161, "unknown": 130, "total": 23951}, "Imipramine": {"generic": "imipramine", "female": 452, "male": 209, "unknown": 2, "total": 663}, "Nortriptyline": {"generic": "nortriptyline", "female": 3788, "male": 1277, "unknown": 14, "total": 5079}, "Fluoxetine": {"generic": "fluoxetine", "female": 86352, "male": 34448, "unknown": 502, "total": 121302}, "Citalopram": {"generic": "citalopram", "female": 84803, "male": 41078, "unknown": 368, "total": 126249}, "Sertraline": {"generic": "sertraline", "female": 134459, "male": 65776, "unknown": 587, "total": 200822}, "Bupropion": {"generic": "bupropion", "female": 97193, "male": 38749, "unknown": 454, "total": 136396}, "Methylphenidate": {"generic": "methylphenidate", "female": 29814, "male": 31841, "unknown": 732, "total": 62387}, "Primaquine": {"generic": "primaquine", "female": 15, "male": 61, "unknown": 2, "total": 78}, "Terfenadine": {"generic": "terfenadine", "female": 0, "male": 0, "unknown": 0, "total": 0, "note": "no FAERS data (not a US prescription drug or withdrawn before 2004)"}, "Fexofenadine": {"generic": "fexofenadine", "female": 23576, "male": 11307, "unknown": 30, "total": 34913}, "MDMA": {"generic": "methylenedioxymethamphetamine", "female": 0, "male": 0, "unknown": 0, "total": 0, "note": "no FAERS data (not a US prescription drug or withdrawn before 2004)"}, "Cannabis": {"generic": "cannabis", "female": 0, "male": 0, "unknown": 0, "total": 0, "note": "no FAERS data (not a US prescription drug or withdrawn before 2004)"}}};
+
+const API = 'https://api.fda.gov/drug/event.json';
+const LABEL_API = 'https://api.fda.gov/drug/label.json';
+const SIGNAL_MARGIN = 0.03;   // a drug is "female-biased" in FAERS if its female share is 3+ points above baseline
+const MIN_REACTION_COUNT = 30; // ignore reactions with fewer reports than this in the per-reaction table
+
+let counts = null;      // from counts.json
+let baselineShare = 0;  // female / (female + male) across all reports
+let active = null;      // selected drug row
+
+// ---------- Helpers ----------
+const pct = x => (x * 100).toFixed(1) + '%';
+const fmt = n => n.toLocaleString();
+const femaleShare = c => (c.female + c.male) ? c.female / (c.female + c.male) : null;
+
+// Which way does Zucker's table say the adverse reactions lean?
+function zuckerAdrDirection(d) {
+  const f = d.female_biased_adrs.trim(), m = d.male_biased_adrs.trim();
+  if (f && !m) return 'female';
+  if (m && !f) return 'male';
+  if (f && m) return 'mixed';
+  return 'none';
+}
+
+// Which way does FAERS lean, relative to the baseline?
+function faersDirection(c) {
+  const s = femaleShare(c);
+  if (s === null) return 'no data';
+  if (s >= baselineShare + SIGNAL_MARGIN) return 'female';
+  if (s <= baselineShare - SIGNAL_MARGIN) return 'male';
+  return 'neutral';
+}
+
+// ---------- Setup ----------
+// Report counts are cached in the page (fetched Oct 25, 2026); reactions and labels load live from openFDA.
+counts = COUNTS;
+baselineShare = femaleShare(counts.baseline);
+document.getElementById('baselineNote').textContent =
+  `Baseline: ${pct(baselineShare)} of all FDA reports are about women (cached Oct 2026). Shares are judged against that, not 50%.`;
+renderList(); renderValidation();
+select(DRUGS.find(d => d.drug === 'Zolpidem'));
+
+// ---------- Drug list ----------
+function renderList(filter = '') {
+  const el = document.getElementById('list'); el.innerHTML = '';
+  DRUGS.filter(d => d.drug.toLowerCase().includes(filter.toLowerCase()))
+       .sort((a, b) => a.drug.localeCompare(b.drug))
+       .forEach(d => {
+    const c = counts.drugs[d.drug] || {}; const s = femaleShare(c);
+    const row = document.createElement('div'); row.className = 'drug' + (active === d ? ' active' : '');
+    const cls = s === null ? '' : s >= baselineShare + SIGNAL_MARGIN ? 'up' : s <= baselineShare - SIGNAL_MARGIN ? 'down' : '';
+    row.innerHTML = `<span>${d.drug}</span><span class="share ${cls}">${s === null ? 'n/a' : pct(s)}</span>`;
+    row.onclick = () => select(d);
+    el.appendChild(row);
+  });
+}
+document.getElementById('q').addEventListener('input', e => renderList(e.target.value));
+
+// ---------- Validation panel: the replication number ----------
+function renderValidation() {
+  let tested = 0, match = 0, neutral = 0;
+  const rows = [];
+  for (const d of DRUGS) {
+    const c = counts.drugs[d.drug]; if (!c || !c.total) continue;
+    const z = zuckerAdrDirection(d); if (z === 'mixed' || z === 'none') continue;
+    const f = faersDirection(c); tested++;
+    if (f === 'neutral') neutral++;
+    else if (f === z) match++;
+    rows.push({ d: d.drug, z, f });
+  }
+  const decided = tested - neutral;
+  document.getElementById('validation').innerHTML = `
+    <h2>Replication check</h2>
+    <p>Zucker and Prendergast found that the direction of a drug's sex difference in exposure predicted the direction of its adverse reactions in <strong>88%</strong> of 59 drugs, using clinical studies. This page asks a cruder question: does the FDA's own report database lean the same way as their table?</p>
+    <div class="bars">
+      <div>Drugs with a clear direction in the table and FAERS data</div><div class="track"></div><div class="num">${tested}</div>
+      <div>FAERS leans the same way</div><div class="track"><div class="fill" style="width:${decided ? match / decided * 100 : 0}%"></div></div><div class="num">${match} of ${decided}</div>
+      <div>FAERS within ${SIGNAL_MARGIN * 100} points of baseline (no call)</div><div class="track"></div><div class="num">${neutral}</div>
+    </div>
+    <p class="note" style="margin-top:10px">Agreement among drugs where FAERS makes a call: <strong>${decided ? pct(match / decided) : 'n/a'}</strong>. Raw report share mostly reflects who takes the drug, so this is a weak test; the per-reaction view for each drug is the stronger one.</p>`;
+}
+
+// ---------- Drug detail ----------
+async function select(d) {
+  active = d; renderList(document.getElementById('q').value);
+  const c = counts.drugs[d.drug] || {}; const s = femaleShare(c);
+  const el = document.getElementById('detail');
+  el.innerHTML = `
+    <div class="card">
+      <h2>${d.drug} <span class="note">· ${d.atc_category}</span></h2>
+      <h3>What the paper says</h3>
+      <p>Drug exposure is higher in <strong>${d.pk_exposure_bias === 'F>M' ? 'women' : 'men'}</strong> (${d.pk_measure}).
+         Reactions reported more in women: ${d.female_biased_adrs || 'none listed'}.
+         More in men: ${d.male_biased_adrs || 'none listed'}.
+         Paper's verdict: <strong>${d.pk_vs_adr}</strong>.</p>
+      <h3>What FDA reports say</h3>
+      ${s === null ? `<p class="note">${c.note || 'No FAERS data.'}</p>` : `
+      <div class="bars">
+        <div>${d.drug}: share of reports about women</div>
+        <div class="track"><div class="fill" style="width:${s * 100}%"></div><div class="mark" style="left:${baselineShare * 100}%"></div></div>
+        <div class="num">${pct(s)}</div>
+        <div>All drugs (baseline)</div>
+        <div class="track"><div class="fill" style="width:${baselineShare * 100}%;background:#999"></div></div>
+        <div class="num">${pct(baselineShare)}</div>
+      </div>
+      <p class="note">${fmt(c.female)} reports about women, ${fmt(c.male)} about men${c.note ? ' (' + c.note + ')' : ''}. FAERS direction: <strong>${faersDirection(c)}</strong>; table direction: <strong>${zuckerAdrDirection(d)}</strong>.</p>`}
+    </div>
+    <div class="card" id="reactions"><h2>Reactions over-reported in women</h2><p class="note">Loading from openFDA…</p></div>
+    <div class="card" id="label"><h2>Does the FDA label mention sex?</h2><p class="note">Loading…</p></div>
+    ${d.drug === 'Zolpidem' ? `<div class="card" id="spotlight"><h2>Zolpidem, before and after the 2013 dose change</h2><p class="note">In January 2013 the FDA cut the recommended dose for women from 10 mg to 5 mg. <button id="spotBtn">Compare reports before and after</button></p></div>` : ''}`;
+  if (s !== null) loadReactions(d, c);
+  else document.getElementById('reactions').innerHTML = '<h2>Reactions over-reported in women</h2><p class="note">No FAERS data for this drug.</p>';
+  loadLabel(d);
+  if (d.drug === 'Zolpidem') document.getElementById('spotBtn').onclick = () => spotlight(d);
+}
+
+// Query string for this drug: generic name, or the fallback the CSV gives.
+function drugSearch(d, c) {
+  if (c.note && c.note.startsWith('via fallback')) return d.fallback_query;
+  return `patient.drug.openfda.generic_name:"${encodeURIComponent(d.openfda_generic_name)}"`;
+}
+
+// Per-reaction comparison: for each reaction, (share of women's reports) / (share of men's reports).
+// This is a simplified proportional reporting ratio, the idea behind AwareDX (Chandak and Tatonetti, 2020).
+async function loadReactions(d, c) {
+  const base = drugSearch(d, c);
+  const get = sex => fetch(`${API}?search=${base}+AND+patient.patientsex:${sex}&count=patient.reaction.reactionmeddrapt.exact`)
+                     .then(r => r.ok ? r.json() : { results: [] }).then(j => j.results || []);
+  try {
+    const [fem, mal] = await Promise.all([get(2), get(1)]);
+    // openFDA returns only each sex's top 100 reactions, so a reaction missing from one list is
+    // truncated, not zero. Compare only reactions present in both lists.
+    const mm = new Map(mal.map(r => [r.term, r.count]));
+    const rows = fem.filter(r => mm.has(r.term)).map(r => {
+      const m = mm.get(r.term);
+      const ratio = (r.count / c.female) / (m / c.male);
+      return { term: r.term, f: r.count, m, ratio };
+    }).filter(r => r.f >= MIN_REACTION_COUNT && r.m >= MIN_REACTION_COUNT)
+      .sort((a, b) => b.ratio - a.ratio);
+    const shared = rows.length;
+    rows.splice(12);
+    const zuckerList = (d.female_biased_adrs || '').toLowerCase();
+    document.getElementById('reactions').innerHTML = `
+      <h2>Reactions over-reported in women</h2>
+      <p class="note">Ratio = how often women report this reaction, relative to men, after adjusting for how many of each reported this drug at all. 2.0 means twice as often. openFDA gives the 100 most-reported reactions per sex; only reactions in both lists are compared (${shared} here), so rare reactions are not visible.</p>
+      <table><tr><th>Reaction (MedDRA term)</th><th class="num">Women</th><th class="num">Men</th><th class="num">Ratio</th><th>In the paper's list?</th></tr>
+      ${rows.map(r => `<tr><td>${r.term}</td><td class="num">${fmt(r.f)}</td><td class="num">${fmt(r.m)}</td><td class="num">${r.ratio.toFixed(2)}</td><td>${zuckerList.includes(r.term.toLowerCase().split(' ')[0]) ? '<span class="flag yes">related</span>' : ''}</td></tr>`).join('')}
+      </table>`;
+  } catch (err) {
+    document.getElementById('reactions').innerHTML = `<h2>Reactions over-reported in women</h2><p class="note">openFDA error: ${err.message}</p>`;
+  }
+}
+
+// Label check: does the dosing or special-populations text mention sex at all?
+async function loadLabel(d) {
+  const el = document.getElementById('label');
+  try {
+    const r = await fetch(`${LABEL_API}?search=openfda.generic_name:"${encodeURIComponent(d.openfda_generic_name)}"&limit=1`);
+    if (!r.ok) { el.innerHTML = '<h2>Does the FDA label mention sex?</h2><p class="note">No label found under this generic name.</p>'; return; }
+    const lab = (await r.json()).results[0];
+    const sections = ['dosage_and_administration', 'use_in_specific_populations', 'clinical_pharmacology'];
+    const re = /\b(women|woman|female|females|sex|gender)\b/i;
+    const hits = [];
+    for (const s of sections) {
+      const text = (lab[s] || []).join(' ');
+      const m = text.match(new RegExp(`[^.]{0,140}${re.source}[^.]{0,160}\\.`, 'i'));
+      if (m) hits.push({ s, quote: m[0].trim() });
+    }
+    const dosing = hits.find(h => h.s === 'dosage_and_administration');
+    el.innerHTML = `<h2>Does the FDA label mention sex?</h2>
+      <p>${dosing ? '<span class="flag yes">Yes, in the dosing section</span>' : hits.length ? '<span class="flag na">Mentioned, but not in dosing</span>' : '<span class="flag no">No mention of sex in dosing, special populations or pharmacology</span>'}</p>
+      ${hits.map(h => `<p class="note">${h.s.replace(/_/g, ' ')}:</p><blockquote>${h.quote}</blockquote>`).join('')}`;
+  } catch (err) { el.innerHTML = `<h2>Does the FDA label mention sex?</h2><p class="note">openFDA error: ${err.message}</p>`; }
+}
+
+// Zolpidem spotlight: sex split of reports before and after the January 2013 dose change.
+async function spotlight(d) {
+  const el = document.getElementById('spotlight'); el.querySelector('p').innerHTML = 'Loading…';
+  const q = range => fetch(`${API}?search=patient.drug.openfda.generic_name:"zolpidem"+AND+receivedate:[${range}]&count=patient.patientsex`).then(r => r.json());
+  try {
+    const [before, after] = await Promise.all([q('20040101+TO+20121231'), q('20130101+TO+20261231')]);
+    const parse = j => { const o = { female: 0, male: 0 }; for (const r of j.results) { if (r.term === 2) o.female = r.count; if (r.term === 1) o.male = r.count; } return o; };
+    const b = parse(before), a = parse(after);
+    el.innerHTML = `<h2>Zolpidem, before and after the 2013 dose change</h2>
+      <div class="bars">
+        <div>2004 to 2012 (10 mg for everyone)</div><div class="track"><div class="fill" style="width:${femaleShare(b) * 100}%"></div><div class="mark" style="left:${baselineShare * 100}%"></div></div><div class="num">${pct(femaleShare(b))}</div>
+        <div>2013 onward (5 mg for women)</div><div class="track"><div class="fill" style="width:${femaleShare(a) * 100}%"></div><div class="mark" style="left:${baselineShare * 100}%"></div></div><div class="num">${pct(femaleShare(a))}</div>
+      </div>
+      <p class="note">Before: ${fmt(b.female)} women, ${fmt(b.male)} men. After: ${fmt(a.female)} women, ${fmt(a.male)} men. Report share is a crude measure; it moves with prescribing and reporting habits too. The label change itself is the point: it is one of very few labels that ever added a sex-specific dose.</p>`;
+  } catch (err) { el.querySelector('p').textContent = 'openFDA error: ' + err.message; }
+}
+</script>
+</body>
+</html>
