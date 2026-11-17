@@ -734,6 +734,12 @@ let active = null;      // selected drug row
 const pct = x => (x * 100).toFixed(1) + '%';
 const fmt = n => n.toLocaleString();
 const femaleShare = c => (c.female + c.male) ? c.female / (c.female + c.male) : null;
+// Wilson 95% interval for a share k/n. With FAERS counts the interval is usually narrow; it is shown so the width is visible, not hidden.
+function wilson(k, n, z = 1.96) {
+  if (!n) return null;
+  const p = k / n, d = 1 + z * z / n, c = p + z * z / (2 * n), h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
+  return [(c - h) / d, (c + h) / d];
+}
 
 // Which way does Zucker's table say the adverse reactions lean?
 function zuckerAdrDirection(d) {
@@ -780,12 +786,14 @@ document.getElementById('q').addEventListener('input', e => renderList(e.target.
 
 // ---------- Validation panel: the replication number ----------
 function renderValidation() {
-  let tested = 0, match = 0, neutral = 0;
+  let withData = 0, tested = 0, match = 0, neutral = 0, ciExcludes = 0;
   const rows = [];
   for (const d of DRUGS) {
     const c = counts.drugs[d.drug]; if (!c || !c.total) continue;
+    withData++;
     const z = zuckerAdrDirection(d); if (z === 'mixed' || z === 'none') continue;
     const f = faersDirection(c); tested++;
+    const ci = wilson(c.female, c.female + c.male); if (ci && (ci[0] > baselineShare || ci[1] < baselineShare)) ciExcludes++;
     if (f === 'neutral') neutral++;
     else if (f === z) match++;
     rows.push({ d: d.drug, z, f });
@@ -794,12 +802,17 @@ function renderValidation() {
   document.getElementById('validation').innerHTML = `
     <h2>Replication check</h2>
     <p>Zucker and Prendergast found that the direction of a drug's sex difference in exposure predicted the direction of its adverse reactions in <strong>88%</strong> of 59 drugs, using clinical studies. This page asks a cruder question: does the FDA's own report database lean the same way as their table?</p>
+    <p class="note"><strong>How a call is made.</strong> ${DRUGS.length} drugs in the table. ${withData} have FAERS reports (${DRUGS.length - withData} have none: not US prescription drugs, or withdrawn before 2004). ${tested} of those have a single direction in the paper's table (the rest list reactions in both sexes, or none). For each, the share of reports about women is compared with the baseline ${pct(baselineShare)}: 3 or more points above is "female", 3 or more below is "male", in between is no call. A call that matches the table's direction counts as agreement.</p>
     <div class="bars">
       <div>Drugs with a clear direction in the table and FAERS data</div><div class="track"></div><div class="num">${tested}</div>
       <div>FAERS leans the same way</div><div class="track"><div class="fill" style="width:${decided ? match / decided * 100 : 0}%"></div></div><div class="num">${match} of ${decided}</div>
       <div>FAERS within ${SIGNAL_MARGIN * 100} points of baseline (no call)</div><div class="track"></div><div class="num">${neutral}</div>
     </div>
-    <p class="note" style="margin-top:10px">Agreement among drugs where FAERS makes a call: <strong>${decided ? pct(match / decided) : 'n/a'}</strong>. Raw report share mostly reflects who takes the drug, so this is a weak test; the per-reaction view for each drug is the stronger one.</p>`;
+    <p class="note" style="margin-top:10px">Agreement among drugs where FAERS makes a call: <strong>${decided ? pct(match / decided) : 'n/a'}</strong>. Raw report share mostly reflects who takes the drug, so this is a weak test; the per-reaction view for each drug is the stronger one.</p>
+    <p class="note">On uncertainty: ${ciExcludes} of ${tested} drugs have a 95% interval (Wilson) that does not include the baseline, because report counts run into the tens of thousands. The 3-point margin is therefore a size-of-difference threshold, not a significance test; almost every difference here is "significant" and most are small.</p>
+    <p class="note"><button id="labelsBtn">Check all ${withData} labels for a sex mention</button> <span id="labelsNote">Runs one label query per drug, about two minutes.</span></p>
+    <div id="labelsOut"></div>`;
+  document.getElementById('labelsBtn').onclick = checkAllLabels;
 }
 
 // ---------- Drug detail ----------
@@ -825,7 +838,8 @@ async function select(d) {
         <div class="track"><div class="fill" style="width:${baselineShare * 100}%;background:#999"></div></div>
         <div class="num">${pct(baselineShare)}</div>
       </div>
-      <p class="note">${fmt(c.female)} reports about women, ${fmt(c.male)} about men${c.note ? ' (' + c.note + ')' : ''}. FAERS direction: <strong>${faersDirection(c)}</strong>; table direction: <strong>${zuckerAdrDirection(d)}</strong>.</p>`}
+      <p class="note">${fmt(c.female)} reports about women, ${fmt(c.male)} about men${c.note ? ' (' + c.note + ')' : ''}. Share ${pct(s)}, 95% interval ${(() => { const ci = wilson(c.female, c.female + c.male); return ci ? pct(ci[0]) + ' to ' + pct(ci[1]) : 'n/a'; })()}; baseline ${pct(baselineShare)}; call margin ${SIGNAL_MARGIN * 100} points. FAERS direction: <strong>${faersDirection(c)}</strong>; table direction: <strong>${zuckerAdrDirection(d)}</strong>.</p>
+      <p class="note"><strong>Read with care.</strong> A higher share of reports from women can mean more women take the drug, more women report side effects, or a higher risk to women. Report share cannot separate those three. Only exposure data (who takes it) would.</p>`}
     </div>
     <div class="card" id="reactions"><h2>Reactions over-reported in women</h2><p class="note">Loading from openFDA…</p></div>
     <div class="card" id="label"><h2>Does the FDA label mention sex?</h2><p class="note">Loading…</p></div>
@@ -864,7 +878,7 @@ async function loadReactions(d, c) {
     const zuckerList = (d.female_biased_adrs || '').toLowerCase();
     document.getElementById('reactions').innerHTML = `
       <h2>Reactions over-reported in women</h2>
-      <p class="note">Ratio = how often women report this reaction, relative to men, after adjusting for how many of each reported this drug at all. 2.0 means twice as often. openFDA gives the 100 most-reported reactions per sex; only reactions in both lists are compared (${shared} here), so rare reactions are not visible.</p>
+      <p class="note">Ratio = how often women report this reaction, relative to men, after adjusting for how many of each reported this drug at all. 2.0 means twice as often. openFDA gives the 100 most-reported reactions per sex; only reactions in both lists are compared (${shared} here), so rare reactions are not visible. A high ratio is a reporting pattern, not a measured risk: some reactions are over-reported by women for every drug.</p>
       <table><tr><th>Reaction (MedDRA term)</th><th class="num">Women</th><th class="num">Men</th><th class="num">Ratio</th><th>In the paper's list?</th></tr>
       ${rows.map(r => `<tr><td>${r.term}</td><td class="num">${fmt(r.f)}</td><td class="num">${fmt(r.m)}</td><td class="num">${r.ratio.toFixed(2)}</td><td>${zuckerList.includes(r.term.toLowerCase().split(' ')[0]) ? '<span class="flag yes">related</span>' : ''}</td></tr>`).join('')}
       </table>`;
@@ -895,6 +909,33 @@ async function loadLabel(d) {
   } catch (err) { el.innerHTML = `<h2>Does the FDA label mention sex?</h2><p class="note">openFDA error: ${err.message}</p>`; }
 }
 
+// Batch label check: the evidence behind "one label of 59". Same sections and terms as loadLabel, run for every drug with data.
+async function checkAllLabels() {
+  const btn = document.getElementById('labelsBtn'), note = document.getElementById('labelsNote'), out = document.getElementById('labelsOut');
+  btn.disabled = true;
+  const sections = ['dosage_and_administration', 'use_in_specific_populations', 'clinical_pharmacology'];
+  const re = /\b(women|woman|female|females|sex|gender)\b/i;
+  const results = [];
+  const list = DRUGS.filter(d => counts.drugs[d.drug] && counts.drugs[d.drug].total).sort((a, b) => a.drug.localeCompare(b.drug));
+  for (let i = 0; i < list.length; i++) {
+    const d = list[i]; note.textContent = `Checking ${i + 1} of ${list.length}: ${d.drug}`;
+    try {
+      const r = await fetch(`${LABEL_API}?search=openfda.generic_name:"${encodeURIComponent(d.openfda_generic_name)}"&limit=1`);
+      if (!r.ok) { results.push({ d: d.drug, status: 'no label found' }); }
+      else {
+        const j = await r.json(); const lab = (j.results || [])[0] || {};
+        const hit = sections.filter(sec => lab[sec] && re.test(lab[sec].join(' ')));
+        results.push({ d: d.drug, status: hit.includes('dosage_and_administration') ? 'yes, in dosing' : hit.length ? 'mentioned in ' + hit.join(', ').replace(/_/g, ' ') : 'no mention' });
+      }
+    } catch (e) { results.push({ d: d.drug, status: 'error: ' + e.message }); }
+    await new Promise(res => setTimeout(res, 1600)); // openFDA allows 40 requests a minute without a key
+  }
+  const dosing = results.filter(r => r.status === 'yes, in dosing').length, none = results.filter(r => r.status === 'no mention').length, missing = results.filter(r => r.status === 'no label found').length;
+  note.textContent = `Done. ${dosing} of ${results.length} labels mention sex in the dosing section; ${none} mention it nowhere in the three sections; ${missing} had no label under the generic name. Checked ${new Date().toISOString().slice(0, 10)}.`;
+  out.innerHTML = `<table><tr><th>Drug</th><th>Label</th></tr>${results.map(r => `<tr><td>${r.d}</td><td>${r.status}</td></tr>`).join('')}</table>`;
+  btn.disabled = false;
+}
+
 // Zolpidem spotlight: sex split of reports before and after the January 2013 dose change.
 async function spotlight(d) {
   const el = document.getElementById('spotlight'); el.querySelector('p').innerHTML = 'Loading…';
@@ -908,7 +949,7 @@ async function spotlight(d) {
         <div>2004 to 2012 (10 mg for everyone)</div><div class="track"><div class="fill" style="width:${femaleShare(b) * 100}%"></div><div class="mark" style="left:${baselineShare * 100}%"></div></div><div class="num">${pct(femaleShare(b))}</div>
         <div>2013 onward (5 mg for women)</div><div class="track"><div class="fill" style="width:${femaleShare(a) * 100}%"></div><div class="mark" style="left:${baselineShare * 100}%"></div></div><div class="num">${pct(femaleShare(a))}</div>
       </div>
-      <p class="note">Before: ${fmt(b.female)} women, ${fmt(b.male)} men. After: ${fmt(a.female)} women, ${fmt(a.male)} men. Report share is a crude measure; it moves with prescribing and reporting habits too. The label change itself is the point: it is one of very few labels that ever added a sex-specific dose.</p>`;
+      <p class="note">Before: ${fmt(b.female)} women, ${fmt(b.male)} men. After: ${fmt(a.female)} women, ${fmt(a.male)} men. Report share is a crude measure; it moves with prescribing and reporting habits too. An unchanged share does not show the dose change failed: if prescribers kept writing 10 mg, or if reports rose for both sexes together, the share would not move either way. Prescribing data would be needed to say. The label change itself is the point: it is one of very few labels that ever added a sex-specific dose.</p>`;
   } catch (err) { el.querySelector('p').textContent = 'openFDA error: ' + err.message; }
 }
 </script>
